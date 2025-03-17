@@ -1,0 +1,7 @@
+{
+    "repositories": [
+        "https://github.com/tensorflow/tensorflow.git",
+        "https://github.com/Microsoft/vscode.git",
+        "https://github.com/nodejs/node.git"
+    ]
+}
