@@ -30,13 +30,13 @@ class GitRepoFetcher:
                     continue
             else:
                 print(f"Repository {repo_name} already exists.")
-
-            # Chunks the code after cloning
+            
+            # Create an instance of CodeChunker to process code files and get embeddings
             chunker = CodeChunker()
             chunks = chunker.process_repository(repo_path)
-
-            # Handles storage or further processing of chunks
-            self.store_chunks(chunks)
+            
+            # Print confirmation of how many chunks (embeddings) have been stored
+            print(f"Stored {len(chunks)} code embeddings in the vector database.")
 
     def store_chunks(self, chunks):
         """Stores or processes the code chunks as needed."""
