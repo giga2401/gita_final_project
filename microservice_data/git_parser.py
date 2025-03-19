@@ -1,14 +1,20 @@
 import os
 import git
+import chromadb
+from chromadb.config import Settings
 from code_chunker import CodeChunker
 from config import load_config
 import json
 
 class GitRepoFetcher:
     def __init__(self, repo_dir="repos"):
-        """Initializes with repo directory."""
+        """Initializes with repo directory and ChromaDB client."""
         self.repo_dir = repo_dir
         os.makedirs(self.repo_dir, exist_ok=True)
+        
+        # Initialize ChromaDB client (new method)
+        self.client = chromadb.PersistentClient(path="chroma_db")  # Directory to store the database
+        self.collection = self.client.get_or_create_collection(name="code_embeddings")
 
     def fetch_repos(self):
         """Fetches repositories from GitHub and clones them with a shallow clone."""
@@ -30,22 +36,33 @@ class GitRepoFetcher:
                     continue
             else:
                 print(f"Repository {repo_name} already exists.")
-            
-            # Create an instance of CodeChunker to process code files and get embeddings
+
+            # Chunks the code after cloning
             chunker = CodeChunker()
             chunks = chunker.process_repository(repo_path)
-            
-            # Print confirmation of how many chunks (embeddings) have been stored
-            print(f"Stored {len(chunks)} code embeddings in the vector database.")
 
-    def store_chunks(self, chunks):
-        """Stores or processes the code chunks as needed."""
+            # Store embeddings in ChromaDB
+            self.store_embeddings(chunks)
+
+    def store_embeddings(self, chunks):
+        """Stores embeddings in ChromaDB."""
         if not chunks:
             print("No chunks to store.")
             return
 
-        output_file = "code_chunks.json"
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(chunks, f, indent=4)
+        embeddings = []
+        metadatas = []
+        ids = []
 
-        print(f"Stored {len(chunks)} chunks in {output_file}.")
+        for chunk in chunks:
+            embeddings.append(chunk["embedding"])
+            metadatas.append({"file": chunk["file"], "summary": chunk["summary"]})
+            ids.append(chunk["file"])  # Use file path as ID
+
+        self.collection.add(
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
+
+        print(f"Stored {len(chunks)} embeddings in ChromaDB.")
