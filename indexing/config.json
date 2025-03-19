@@ -1,0 +1,8 @@
+{
+    "repositories": [
+        "https://github.com/leachim6/hello-world"
+    ],
+    "embedding_model": "microsoft/codebert-base",
+    "vector_db_path": "chroma_db",
+    "collection_name": "code_embeddings"
+}
