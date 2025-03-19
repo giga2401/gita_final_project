@@ -45,6 +45,12 @@ class IndexingScript:
             for file in files:
                 if file.endswith((".py", ".js", ".java", ".cpp")):
                     file_path = os.path.join(root, file)
+                    # Check if the file's embedding already exists
+                    existing_embeddings = self.collection.get(ids=[file_path])
+                    if existing_embeddings["ids"]:  # If the ID exists, skip this file
+                        print(f"Skipping existing file: {file_path}")
+                        continue
+
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         code = f.read()
                         embedding = self.generate_embedding(code)
