@@ -1,6 +1,5 @@
-openai
-python-dotenv
+chromadb
 transformers
 torch
-chromadb
 gitpython
+python-dotenv
