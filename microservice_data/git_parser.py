@@ -4,7 +4,6 @@ import chromadb
 from chromadb.config import Settings
 from code_chunker import CodeChunker
 from config import load_config
-import json
 
 class GitRepoFetcher:
     def __init__(self, repo_dir="repos"):
@@ -12,8 +11,8 @@ class GitRepoFetcher:
         self.repo_dir = repo_dir
         os.makedirs(self.repo_dir, exist_ok=True)
         
-        # Initialize ChromaDB client (new method)
-        self.client = chromadb.PersistentClient(path="chroma_db")  # Directory to store the database
+        # Initialize ChromaDB client
+        self.client = chromadb.PersistentClient(path="chroma_db")
         self.collection = self.client.get_or_create_collection(name="code_embeddings")
 
     def fetch_repos(self):
@@ -50,19 +49,11 @@ class GitRepoFetcher:
             print("No chunks to store.")
             return
 
-        embeddings = []
-        metadatas = []
-        ids = []
-
         for chunk in chunks:
-            embeddings.append(chunk["embedding"])
-            metadatas.append({"file": chunk["file"], "summary": chunk["summary"]})
-            ids.append(chunk["file"])  # Use file path as ID
-
-        self.collection.add(
-            embeddings=embeddings,
-            metadatas=metadatas,
-            ids=ids
-        )
+            self.collection.add(
+                embeddings=[chunk["embedding"]],
+                metadatas=[{"file": chunk["file"], "summary": chunk["summary"]}],
+                ids=[chunk["file"]]  # Use file path as ID
+            )
 
         print(f"Stored {len(chunks)} embeddings in ChromaDB.")

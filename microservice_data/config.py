@@ -12,7 +12,7 @@ def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
-            return config.get("repositories", [])  # Extract repository list
+            return config.get("repositories", [])
     except (json.JSONDecodeError, FileNotFoundError) as e:
         print(f"Error loading config file: {e}")
         return []
