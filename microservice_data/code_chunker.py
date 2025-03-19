@@ -26,10 +26,13 @@ class CodeChunker:
 
     def chunk_code(self, code, file_path):
         """Chunks the code and summarizes it using OpenAI."""
-        response = openai.ChatCompletion.create(
+        client = openai.OpenAI(api_key=self.api_key)  # Use the new OpenAI client
+        response = client.chat.completions.create(
             model=self.model_name,
-            messages=[{"role": "system", "content": "Summarize this code snippet."},
-                      {"role": "user", "content": code}]
+            messages=[
+                {"role": "system", "content": "Summarize this code snippet."},
+                {"role": "user", "content": code},
+            ]
         )
-        summary = response["choices"][0]["message"]["content"]
+        summary = response.choices[0].message.content
         return {"file": file_path, "summary": summary}
