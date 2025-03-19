@@ -1,5 +1,0 @@
-chromadb
-transformers
-torch
-gitpython
-python-dotenv
