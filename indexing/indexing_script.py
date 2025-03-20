@@ -4,14 +4,20 @@ import chromadb
 from chromadb.config import Settings
 from transformers import AutoTokenizer, AutoModel
 import torch
+from multiprocessing import Pool
 from config import load_config
+import logging
+from joblib import Parallel, delayed
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class IndexingScript:
     def __init__(self):
         self.config = load_config()
         self.repo_dir = "repos"
         os.makedirs(self.repo_dir, exist_ok=True)
-        
+
         self.client = chromadb.PersistentClient(path=self.config["vector_db_path"])
         self.collection = self.client.get_or_create_collection(name=self.config["collection_name"])
 
@@ -21,42 +27,39 @@ class IndexingScript:
     def fetch_repos(self):
         repositories = self.config["repositories"]
         if not repositories:
-            print("No repositories found in config.")
+            logging.warning("No repositories found in config.")
             return
 
         for repo_url in repositories:
             repo_name = repo_url.split("/")[-1].replace(".git", "")
             repo_path = os.path.join(self.repo_dir, repo_name)
-            
+
             if not os.path.exists(repo_path):
-                print(f"Cloning {repo_name} (shallow clone)...")
+                logging.info(f"Cloning {repo_name} (shallow clone)...")
                 try:
                     git.Repo.clone_from(repo_url, repo_path, depth=1, single_branch=True)
                 except git.exc.GitCommandError as e:
-                    print(f"Error cloning {repo_url}: {e}")
+                    logging.error(f"Error cloning {repo_url}: {e}")
                     continue
             else:
-                print(f"Repository {repo_name} already exists.")
+                logging.info(f"Repository {repo_name} already exists.")
 
-            self.index_code_files(repo_path)
+            self.index_code_files(repo_path, repo_name)
 
-    def index_code_files(self, repo_path):
-        # Get the list of programming languages from the config
+    def index_code_files(self, repo_path, repo_name):
         programming_languages = self.config.get("programming_languages")
-        
         if not programming_languages:
-            print("No programming languages specified in config. Skipping indexing.")
+            logging.warning("No programming languages specified in config. Skipping indexing.")
             return
-        
+
         for root, _, files in os.walk(repo_path):
             for file in files:
-                # Check if the file extension is in the list of programming languages
                 if any(file.endswith(lang) for lang in programming_languages):
                     file_path = os.path.join(root, file)
-                    # Check if the file's embedding already exists
-                    existing_embeddings = self.collection.get(ids=[file_path])
+                    file_id = f"{repo_name}_{file_path}"
+                    existing_embeddings = self.collection.get(ids=[file_id])
                     if existing_embeddings["ids"]:  # If the ID exists, skip this file
-                        print(f"Skipping existing file: {file_path}")
+                        logging.info(f"Skipping existing file: {file_path}")
                         continue
 
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -65,8 +68,14 @@ class IndexingScript:
                         self.collection.add(
                             embeddings=[embedding],
                             metadatas=[{"file": file_path}],
-                            ids=[file_path]
+                            ids=[file_id]
                         )
+
+    def process_file(self, file_path):
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            code = f.read()
+            embedding = self.generate_embedding(code)
+            return embedding, file_path
 
     def generate_embedding(self, code):
         inputs = self.tokenizer(
@@ -76,6 +85,8 @@ class IndexingScript:
             padding=True,
             max_length=512
         )
+        if inputs['input_ids'].shape[1] >= 512:
+            logging.warning(f"Code exceeds token limit and will be truncated.")
         with torch.no_grad():
             outputs = self.embedding_model(**inputs)
         embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
