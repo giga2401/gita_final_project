@@ -41,9 +41,17 @@ class IndexingScript:
             self.index_code_files(repo_path)
 
     def index_code_files(self, repo_path):
+        # Get the list of programming languages from the config
+        programming_languages = self.config.get("programming_languages")
+        
+        if not programming_languages:
+            print("No programming languages specified in config. Skipping indexing.")
+            return
+        
         for root, _, files in os.walk(repo_path):
             for file in files:
-                if file.endswith((".py", ".js", ".java", ".cpp")):
+                # Check if the file extension is in the list of programming languages
+                if any(file.endswith(lang) for lang in programming_languages):
                     file_path = os.path.join(root, file)
                     # Check if the file's embedding already exists
                     existing_embeddings = self.collection.get(ids=[file_path])
