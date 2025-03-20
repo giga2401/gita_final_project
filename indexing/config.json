@@ -1,7 +1,10 @@
 {
     "repositories": [
-        "https://github.com/leachim6/hello-world"
+        "https://github.com/tiagobpires/CS50x-2022",
+        "https://github.com/aviiciii/cs50python",
+        "https://github.com/velurimithun/CS106A-Solutions"
     ],
+    "programming_languages": [".py", ".java", ".c", ".sql"],
     "embedding_model": "microsoft/codebert-base",
     "vector_db_path": "chroma_db",
     "collection_name": "code_embeddings"
