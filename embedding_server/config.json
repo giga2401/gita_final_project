@@ -1,0 +1,4 @@
+{
+    "embedding_model": "microsoft/codebert-base",
+    "port": 5000
+}
