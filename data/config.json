@@ -1,0 +1,9 @@
+{
+    "embedding_model": "microsoft/codebert-base",
+    "llm_model": "gpt-3.5-turbo",
+    "vector_db_path": "chroma_db",
+    "collection_name": "code_embeddings",
+    "embedding_server_port": 5000,
+    "plagiarism_api_port": 8000,
+    "dataset_path": "data/dataset.csv"
+}
