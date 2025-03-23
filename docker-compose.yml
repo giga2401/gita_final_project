@@ -1,0 +1,27 @@
+version: "3.8"
+services:
+  embedding_server:
+    build: ./embedding_server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./embedding_server:/app
+    command: uvicorn embedding_server:app --host 0.0.0.0 --port 5000
+
+  plagiarism_checker:
+    build: ./plag_checker
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./plag_checker:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      - embedding_server
+
+  evaluation:
+    build: ./evaluation
+    volumes:
+      - ./evaluation:/app
+    command: python eval.py
+    depends_on:
+      - plagiarism_checker
