@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import chromadb
-from chromadb.config import Settings
 from shared.config import load_config, get_openai_api_key
 from openai import OpenAI
 from prompt import PLAGIARISM_CHECK_PROMPT
