@@ -6,8 +6,6 @@ import logging
 from shared.config import load_config
 from shared.utils import setup_logging
 
-
-
 setup_logging()
 
 app = FastAPI()
