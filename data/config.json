@@ -1,15 +1,23 @@
 {
     "embedding_model": "microsoft/codebert-base",
-    "llm_model": "gpt-3.5-turbo",
-    "vector_db_path": "chroma_db",
+    "llm_model": "gpt-3.5-turbo", 
+    "vector_db_path": "./chroma_db",
     "collection_name": "code_embeddings",
-    "embedding_server_port": 5000,
     "plagiarism_api_port": 8000,
-    "dataset_path": "../data/dataset.csv",
+    "embedding_api_port": 8001,
+    "rag_only_threshold": 12, 
+    "max_llm_context_length": 10000, 
+    "dataset_path": "./data/dataset.csv",
     "repositories": [
         "https://github.com/tiagobpires/CS50x-2022",
         "https://github.com/aviiciii/cs50python",
         "https://github.com/velurimithun/CS106A-Solutions"
     ],
-    "programming_languages": [".py", ".java", ".c", ".sql"]
+    "programming_languages": [".py", ".java", ".c", ".sql"],
+    "max_chunk_length": 512,
+    "chunk_stride": 256, 
+    "indexing_batch_size": 32, 
+    "db_check_indexed_files": true, 
+    "plagiarism_similarity_threshold": null, 
+    "rag_num_results": 10 
 }
