@@ -1,27 +1,110 @@
 version: "3.8"
+
 services:
   embedding_server:
-    build: ./embedding_server
-    ports:
-      - "5000:5000"
+    build:
+      context: .
+      dockerfile: embedding_server/Dockerfile
     volumes:
-      - ./embedding_server:/app
-    command: uvicorn embedding_server:app --host 0.0.0.0 --port 5000
+      - ./data/config.json:/app/data/config.json:ro
+      - ./shared:/app/shared:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      # ---------------------
+    environment:
+      - PORT=8001 
+      - IS_DOCKER_ENV=true
+      - HF_HOME=/root/.cache/huggingface
+      # ---------------------
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 240s 
+    networks:
+      - plagiarism_net
+
+  indexing:
+    build:
+      context: .
+      dockerfile: indexing/Dockerfile
+    volumes:
+      # Mounting
+      - ./chroma_db:/app/chroma_db 
+      - ./data/config.json:/app/data/config.json:ro
+      - ./indexing/repos:/app/indexing/repos 
+      - ./shared:/app/shared:ro
+
+    environment:
+      # Uses service name for inter-container communication
+      - EMBEDDING_SERVICE_URL=http://embedding_server:8001
+      - IS_DOCKER_ENV=true
+    depends_on:
+       embedding_server:
+         condition: service_healthy # Waits for embedding server to be ready
+    
+    command: sleep infinity
+    networks:
+      - plagiarism_net
 
   plagiarism_checker:
-    build: ./plag_checker
+    build:
+      context: .
+      dockerfile: plag_checker/Dockerfile
     ports:
-      - "8000:8000"
+      # Exposes port 8000 on the host, mapping to 8000 in the container
+      - "${PLAGIARISM_API_PORT:-8000}:8000"
     volumes:
-      - ./plag_checker:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+      - ./chroma_db:/app/chroma_db 
+      - ./data/config.json:/app/data/config.json:ro
+      - ./.env:/app/.env:ro 
+      - ./shared:/app/shared:ro
+      - ./plag_checker:/app/plag_checker
+    environment:
+      - PORT=8000 
+      - EMBEDDING_SERVICE_URL=http://embedding_server:8001
+      - IS_DOCKER_ENV=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY} # Passes key from host .env
     depends_on:
-      - embedding_server
+       embedding_server:
+         condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s 
+    networks:
+      - plagiarism_net
 
   evaluation:
-    build: ./evaluation
+    build:
+      context: .
+      dockerfile: evaluation/Dockerfile
     volumes:
-      - ./evaluation:/app
-    command: python eval.py
+      - ./data/config.json:/app/data/config.json:ro
+      - ./data/dataset.csv:/app/data/dataset.csv:ro
+      - ./evaluation_results:/app/evaluation_results
+      - ./shared:/app/shared:ro
+      - ./.env:/app/.env:ro
+      - ./chroma_db:/app/chroma_db:ro
+      - ./evaluation:/app/evaluation
+      
+    environment:
+      # Uses service names for inter-container communication
+      - API_HOST=plagiarism_checker
+      - EMBEDDING_SERVICE_URL=http://embedding_server:8001
+      - IS_DOCKER_ENV=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY} 
     depends_on:
-      - plagiarism_checker
+       plagiarism_checker:
+         condition: service_healthy 
+       embedding_server:
+         condition: service_healthy 
+    networks:
+      - plagiarism_net
+
+networks:
+  plagiarism_net:
+    driver: bridge
