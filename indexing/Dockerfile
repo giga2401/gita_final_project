@@ -1,10 +1,14 @@
-FROM python:3.9-slim as builder
-RUN apt-get update && apt-get install -y git
-COPY . /app
-WORKDIR /app
-RUN pip install --no-cache-dir -r requirements.txt
 
 FROM python:3.9-slim
-COPY --from=builder /app /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-CMD ["sh", "-c", "python fetch_repos.py && python index.py"]
+COPY ./shared /app/shared
+COPY indexing/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY ./indexing /app/indexing
+COPY ./data/config.json /app/data/config.json
+ENV PYTHONPATH "${PYTHONPATH}:/app"
+
+CMD ["sleep", "infinity"]

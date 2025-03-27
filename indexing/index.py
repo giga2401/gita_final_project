@@ -1,246 +1,302 @@
 import os
-import chromadb
-# from chromadb.config import Settings # Not strictly needed for client usage
-from transformers import AutoTokenizer, AutoModel
-import torch
-import logging
-from shared.config import load_config
-from shared.utils import setup_logging
 import sys
+import logging
+import requests
+import time
+from typing import List, Optional 
 
-# Setting the working directory to the project root
 try:
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-except NameError: # Handle case where __file__ is not defined (e.g., interactive session)
-    project_root = os.path.abspath('.') # Assume current directory is project root
+    from shared.config import load_config
+    from shared.utils import setup_logging
+except ModuleNotFoundError as e:
+    print(f"[Error] Could not import from 'shared'. Ensure the project root is in your PYTHONPATH.")
+    print(f"  Current sys.path: {sys.path}")
+    raise e
 
-os.chdir(project_root)
-if project_root not in sys.path:
-    sys.path.append(project_root)
+import chromadb
+from transformers import AutoTokenizer
 
-# Ensure setup_logging is called only once if necessary
+# --- Setups Logging ---
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# Determines project root
+try:
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+except NameError: # Handles case where __file__ is not defined
+    project_root = os.path.abspath('.')
+logger.info(f"Project root determined as: {project_root}")
+
+# --- Variable to detect Docker environment ---
+IS_DOCKER_ENV = os.environ.get('IS_DOCKER_ENV', 'false').lower() == 'true'
+logger.info(f"Running in Docker environment: {IS_DOCKER_ENV}")
+
 class IndexProcessor:
     def __init__(self):
-        self.config = load_config()
-        self.repo_dir = os.path.join("indexing", "repos")
-        os.makedirs(self.repo_dir, exist_ok=True)
+        logger.info("Initializing IndexProcessor...")
+        try:
+            self.config = load_config()
+            self.repo_dir = os.path.join(project_root, "indexing", "repos")
+            os.makedirs(self.repo_dir, exist_ok=True)
 
-        # --- ChromaDB Client Setup ---
-        db_path = self.config.get("vector_db_path", os.path.join(project_root, "chroma_db"))
-        logger.info(f"Initializing ChromaDB client at path: {db_path}")
-        self.client = chromadb.PersistentClient(path=db_path)
+            # --- ChromaDB Client Setup ---
+            db_path_from_config = self.config["vector_db_path"]
+            if not os.path.isabs(db_path_from_config):
+                 db_path = os.path.join(project_root, db_path_from_config)
+            else:
+                 db_path = db_path_from_config
+            logger.info(f"Initializing ChromaDB client at resolved path: {db_path}")
+            db_parent_dir = os.path.dirname(db_path)
+            if db_parent_dir: os.makedirs(db_parent_dir, exist_ok=True)
+            self.client = chromadb.PersistentClient(path=db_path)
 
-        collection_name = self.config.get("collection_name", "code_embeddings")
-        logger.info(f"Getting or creating collection: {collection_name}")
-        self.collection = self.client.get_or_create_collection(name=collection_name)
+            self.collection_name = self.config["collection_name"]
+            logger.info(f"Getting or creating collection: {self.collection_name}")
+            self.collection = self.client.get_or_create_collection(name=self.collection_name)
+            logger.info(f"Collection '{self.collection_name}' ready. Item count: {self.collection.count()}")
 
-        # --- Model and Tokenizer Setup ---
-        model_name = self.config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
-        logger.info(f"Loading tokenizer and model: {model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.embedding_model = AutoModel.from_pretrained(model_name)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.embedding_model.to(self.device)
-        logger.info(f"Using device: {self.device}")
+            # --- Tokenizer Setup ---
+            model_name = self.config["embedding_model"]
+            logger.info(f"Loading tokenizer (only): {model_name}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        # --- Chunking Configuration ---
-        self.max_chunk_length = self.config.get(
-            "max_chunk_length",
-            getattr(self.tokenizer, 'model_max_length', 512) # Use tokenizer's max length as a sensible default
-        )
-        # Ensure max_chunk_length doesn't exceed model's absolute max (if known)
-        model_abs_max = getattr(self.embedding_model.config, 'max_position_embeddings', None)
-        if model_abs_max and self.max_chunk_length > model_abs_max:
-             logger.warning(f"Configured max_chunk_length ({self.max_chunk_length}) exceeds model's max_position_embeddings ({model_abs_max}). Clamping to {model_abs_max}.")
-             self.max_chunk_length = model_abs_max
+            # --- Gets Embedding Service URL ---
+            default_embedding_host = "embedding_server" if IS_DOCKER_ENV else "localhost"
+            embedding_port = self.config.get("embedding_api_port", 8001)
+            self.embedding_batch_url = os.environ.get("EMBEDDING_SERVICE_URL", f"http://{default_embedding_host}:{embedding_port}") + "/embed_batch"
+            logger.info(f"Using Embedding Service Batch URL: {self.embedding_batch_url}")
 
-        self.stride = self.config.get("chunk_stride", int(self.max_chunk_length * 0.75))
-        if self.stride >= self.max_chunk_length:
-             logger.warning(f"Chunk stride ({self.stride}) is >= max_chunk_length ({self.max_chunk_length}). Setting stride to {int(self.max_chunk_length * 0.75)}.")
-             self.stride = int(self.max_chunk_length * 0.75)
+            # --- Chunking Configuration ---
+            self.max_chunk_length = self.config.get("max_chunk_length", 512)
+            self.stride = self.config.get("chunk_stride", 256) 
+            model_max_len = getattr(self.tokenizer, 'model_max_length', self.max_chunk_length)
+            if self.max_chunk_length > model_max_len:
+                 logger.warning(f"Configured max_chunk_length ({self.max_chunk_length}) exceeds tokenizer's model_max_length ({model_max_len}). Using {model_max_len}.")
+                 self.max_chunk_length = model_max_len
+            if self.stride >= self.max_chunk_length:
+                 logger.warning(f"Chunk stride ({self.stride}) >= max_chunk_length ({self.max_chunk_length}). Adjusting stride.")
+                 self.stride = int(self.max_chunk_length * 0.75)
+            logger.info(f"Chunking config: max_length={self.max_chunk_length}, stride={self.stride}")
 
-        logger.info(f"Chunking config: max_length={self.max_chunk_length}, stride={self.stride}")
+            # --- Indexing Configuration ---
+            self.batch_size = self.config.get("indexing_batch_size", 32)
+            self.check_indexed = self.config.get("db_check_indexed_files", True)
 
+        except (RuntimeError, ValueError, Exception) as e:
+             logger.critical(f"Failed to initialize IndexProcessor: {e}", exc_info=True)
+             raise
+
+    def chunk_code_tokens(self, code: str) -> List[List[int]]:
+        """Tokenizes code and returns overlapping chunks as lists of token IDs."""
+        if not code or not code.strip():
+            return []
+        try:
+            inputs = self.tokenizer(
+                code,
+                max_length=self.max_chunk_length,
+                stride=self.stride,
+                truncation=True,
+                return_overflowing_tokens=True,
+                padding=False, # Because padding happens server-side for batches
+                return_attention_mask=False 
+            )
+            # Checks if 'input_ids' and 'overflow_to_sample_mapping' are present
+            input_ids_list = inputs.get('input_ids')
+            if not input_ids_list:
+                # If no overflowing tokens, the original input is one chunk (if it fits)
+                single_input = self.tokenizer(code, truncation=True, max_length=self.max_chunk_length)
+                return single_input.get('input_ids', [[]]) # Returns as list of lists
+
+            return input_ids_list
+        except Exception as e:
+            logger.error(f"Error during tokenization/chunking: {e}", exc_info=False)
+            return []
+
+    def get_embeddings_batch_via_service(self, texts: List[str], retries=2, delay=3) -> Optional[List[List[float]]]:
+        """Gets embeddings for a batch of texts by calling the embedding service with retries."""
+        if not texts:
+            return []
+
+        for attempt in range(retries + 1):
+            try:
+                response = requests.post(self.embedding_batch_url, json={"texts": texts}, timeout=60) # Longer timeout for batch
+                response.raise_for_status()
+                result = response.json()
+                if "embeddings" in result and isinstance(result["embeddings"], list) and len(result["embeddings"]) == len(texts):
+                    return result["embeddings"]
+                else:
+                    logger.error(f"Invalid response format or length mismatch from embedding service batch endpoint: {result}")
+                    return None
+            except requests.exceptions.Timeout:
+                logger.warning(f"Embedding service batch request timed out (Attempt {attempt+1}/{retries+1}). Retrying in {delay}s...")
+            except requests.exceptions.RequestException as req_err:
+                status_code = req_err.response.status_code if req_err.response is not None else None
+                logger.warning(f"Embedding service batch request failed (Attempt {attempt+1}/{retries+1}): {req_err}. Status: {status_code}. Retrying in {delay}s...")
+            except Exception as e:
+                 logger.error(f"Unexpected error during embedding service batch call (Attempt {attempt+1}/{retries+1}): {e}", exc_info=True)
+
+            if attempt < retries:
+                 time.sleep(delay * (attempt + 1)) 
+            else:
+                 logger.error(f"Failed to get embeddings for batch after {retries+1} attempts.")
+                 return None
+        return None # unreachable if loop finishes
+
+    def is_file_indexed(self, relative_path: str) -> bool:
+        """Checks if a file with the given relative path has any chunks in the DB."""
+        if not self.check_indexed:
+            return False
+        try:
+            results = self.collection.get(
+                where={"relative_path": relative_path},
+                limit=1,
+                include=[] # Doesn't need content, just checks existence
+            )
+            is_present = bool(results and results.get("ids"))
+            if is_present:
+                logger.debug(f"File '{relative_path}' found in DB, skipping.")
+            return is_present
+        except Exception as e:
+            logger.error(f"Error checking index status for {relative_path}: {e}. Assuming not indexed.")
+            return False
 
     def index_code_files(self):
+        """Walks through repo directories and indexes code files using the embedding service."""
         programming_languages = self.config.get("programming_languages")
         if not programming_languages:
-            logger.warning("No programming languages specified in config. Skipping indexing.")
+            logger.warning("No programming languages specified. Skipping indexing.")
             return
 
-        logger.info(f"Starting indexing for languages: {programming_languages}")
-        indexed_files = 0
-        skipped_files = 0
-        processed_chunks = 0
-        error_files = 0
+        logger.info(f"Starting indexing for languages: {programming_languages} in dir: {self.repo_dir}")
+        stats = {"indexed_files": 0, "skipped_already_indexed": 0, "processed_chunks": 0, "error_files": 0, "embedding_errors": 0}
 
-        for repo_name in os.listdir(self.repo_dir):
-            repo_path = os.path.join(self.repo_dir, repo_name)
-            if os.path.isdir(repo_path):
-                logger.info(f"Processing repository: {repo_name}")
-                try:
-                    repo_stats = self._index_repo(repo_path, repo_name)
-                    indexed_files += repo_stats['indexed']
-                    skipped_files += repo_stats['skipped']
-                    processed_chunks += repo_stats['chunks']
-                    error_files += repo_stats['errors']
-                except Exception as e:
-                    logger.error(f"Unhandled exception while processing repo {repo_name}: {e}", exc_info=True)
-                    # Depending on desired robustness, you might want to skip the whole repo or stop
+        files_to_process = []
+        for root, _, files in os.walk(self.repo_dir):
+            if ".git" in root.split(os.sep): continue
 
-        logger.info(f"Indexing complete. Indexed: {indexed_files} files, Skipped: {skipped_files} files, Errors: {error_files} files, Processed: {processed_chunks} chunks.")
-
-
-    def _index_repo(self, repo_path, repo_name):
-        repo_indexed_count = 0
-        repo_skipped_count = 0
-        repo_chunk_count = 0
-        repo_error_count = 0
-        for root, _, files in os.walk(repo_path):
-            if ".git" in root.split(os.sep):
-                continue
             for file in files:
-                if not any(file.lower().endswith(lang.lower()) for lang in self.config["programming_languages"]):
+                if any(file.lower().endswith(lang.lower()) for lang in programming_languages):
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, self.repo_dir)
+                    files_to_process.append((file_path, relative_path))
+
+        logger.info(f"Found {len(files_to_process)} potential files to index.")
+
+        for file_path, relative_path in files_to_process:
+            repo_name = relative_path.split(os.sep)[0] if os.sep in relative_path else "root"
+            file_id_base = relative_path.replace(os.sep, "__").replace('.', '_') # Safer ID
+
+            try:
+                # --- Checks if already indexed ---
+                if self.is_file_indexed(relative_path):
+                    stats["skipped_already_indexed"] += 1
                     continue
 
-                file_path = os.path.join(root, file)
-                relative_path = os.path.relpath(file_path, self.repo_dir)
-                file_id_base = relative_path.replace(os.sep, "_")
+                logger.info(f"Processing file: {relative_path}")
 
-                first_chunk_id = f"{file_id_base}_chunk_0"
-                try:
-                    # Use limit=0 and count() for a potentially faster existence check
-                    # existing_check = self.collection.get(ids=[first_chunk_id], limit=1, include=[]) # Faster if just checking existence
-                    # Note: As of chromadb 0.4.x, get with limit=1 might be efficient enough. Count() can be slower sometimes. Stick with get for now.
-                    existing_embeddings = self.collection.get(ids=[first_chunk_id], limit=1)
-                    if existing_embeddings and existing_embeddings["ids"]:
-                        logger.debug(f"Skipping already indexed file: {file_path}")
-                        repo_skipped_count += 1
-                        continue
-                except Exception as e:
-                     logger.error(f"Error checking existence for {first_chunk_id} in {file_path}: {e}")
-                     repo_error_count += 1 # Count as error and skip
-                     continue
-
-                logger.info(f"Indexing file: {file_path}")
+                # --- Reads File Content ---
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         code = f.read()
-
-                    if not code.strip():
-                        logger.warning(f"Skipping empty file: {file_path}")
+                    if not code or not code.strip():
+                        logger.warning(f"Skipping empty file: {relative_path}")
                         continue
+                except Exception as read_err:
+                     logger.error(f"Error reading file {relative_path}: {read_err}")
+                     stats["error_files"] += 1
+                     continue
 
-                    # --- Generate embeddings ---
-                    embeddings, chunk_input_ids_lists = self.generate_embeddings_for_chunks(code)
-                    # --- End Generate embeddings ---
+                # --- Chunks Code ---
+                tokenized_chunks = self.chunk_code_tokens(code)
+                if not tokenized_chunks:
+                     logger.warning(f"No tokenized chunks generated for file: {relative_path}")
+                     continue
 
-                    if not embeddings:
-                         logger.warning(f"No embeddings generated for file: {file_path} (potentially due to errors in chunking/embedding)")
-                         # Don't increment error count here if generate_embeddings handles its own errors
-                         continue # Skip this file
+                # --- Prepares Data for ChromaDB (Batch Process) ---
+                chunks_data = [] # List of tuples: (chunk_id, chunk_text, metadata)
+                for i, chunk_ids_list in enumerate(tokenized_chunks):
+                    chunk_id = f"{file_id_base}_chunk_{i}"
+                    try:
+                        chunk_text = self.tokenizer.decode(chunk_ids_list, skip_special_tokens=True).strip()
+                        if not chunk_text:
+                            logger.warning(f"Skipping empty decoded chunk {i} for {relative_path}")
+                            continue
 
-                    ids_to_add = []
-                    embeddings_to_add = []
-                    metadatas_to_add = []
-                    documents_to_add = []
-
-                    for i, (embedding, chunk_ids_list) in enumerate(zip(embeddings, chunk_input_ids_lists)):
-                        chunk_id = f"{file_id_base}_chunk_{i}"
                         chunk_metadata = {
-                            "file_path": file_path,
                             "relative_path": relative_path,
                             "repo_name": repo_name,
-                            "chunk_index": i
+                            "chunk_index": i,
+                            "file_id_base": file_id_base # Stores base ID for reference
                         }
-                        chunk_text = self.tokenizer.decode(chunk_ids_list, skip_special_tokens=True)
+                        chunks_data.append((chunk_id, chunk_text, chunk_metadata))
+                    except Exception as decode_err:
+                        logger.error(f"Error decoding chunk {i} for {relative_path}: {decode_err}")
+                        continue # Skips this chunk
 
-                        ids_to_add.append(chunk_id)
-                        embeddings_to_add.append(embedding)
-                        metadatas_to_add.append(chunk_metadata)
-                        documents_to_add.append(chunk_text)
-
-                    if ids_to_add:
-                         logger.debug(f"Adding {len(ids_to_add)} chunks for {file_path}")
-                         self.collection.add(
-                             embeddings=embeddings_to_add,
-                             metadatas=metadatas_to_add,
-                             documents=documents_to_add,
-                             ids=ids_to_add
-                         )
-                         repo_indexed_count += 1
-                         repo_chunk_count += len(ids_to_add)
-
-                except FileNotFoundError:
-                    logger.error(f"File not found during processing: {file_path}")
-                    repo_error_count += 1
-                except Exception as e:
-                    # Catch errors during the file processing/embedding/adding phase
-                    logger.error(f"Failed to process or index file {file_path}: {e}", exc_info=True)
-                    repo_error_count += 1
-
-        return {"indexed": repo_indexed_count, "skipped": repo_skipped_count, "chunks": repo_chunk_count, "errors": repo_error_count}
-
-
-    def chunk_code_tokens(self, code):
-        """Tokenizes code and returns overlapping chunks as lists of token IDs."""
-        # IMPORTANT: Do NOT return tensors here. Return Python lists.
-        inputs = self.tokenizer(
-            code,
-            max_length=self.max_chunk_length,
-            stride=self.stride,
-            truncation=True,
-            return_overflowing_tokens=True,
-            padding=False,  # No padding needed at this stage
-            # return_tensors="pt"  <--- REMOVE THIS or set to None (default)
-        )
-        # inputs['input_ids'] is now a list of lists of integers
-        return inputs['input_ids']
-
-    def generate_embeddings_for_chunks(self, code):
-        """Generates embeddings for overlapping code chunks."""
-        # Get the tokenized chunks (list of lists of integers)
-        chunked_input_ids_lists = self.chunk_code_tokens(code)
-
-        all_embeddings = []
-        # Store the original python lists of ids for potential decoding
-        all_chunk_ids_lists = []
-
-        self.embedding_model.eval()
-        with torch.no_grad():
-            for i, chunk_ids_list in enumerate(chunked_input_ids_lists):
-                # logger.debug(f"Processing chunk {i+1}/{len(chunked_input_ids_lists)}, length: {len(chunk_ids_list)}")
-
-                 # *** Convert the individual chunk (list of ints) to a tensor HERE ***
-                try:
-                    # Create tensor from the list
-                    chunk_tensor = torch.tensor(chunk_ids_list)
-                    # Add batch dimension and move to device
-                    chunk_ids_batch = chunk_tensor.unsqueeze(0).to(self.device)
-
-                    # Get model output
-                    outputs = self.embedding_model(input_ids=chunk_ids_batch)
-                    embedding = outputs.last_hidden_state.mean(dim=1).squeeze()
-                    all_embeddings.append(embedding.cpu().numpy().tolist())
-                    # Store the original list of IDs
-                    all_chunk_ids_lists.append(chunk_ids_list)
-
-                except Exception as e:
-                    logger.error(f"Error embedding chunk {i} (length {len(chunk_ids_list)}): {e}", exc_info=False) # Keep log concise
-                    # Optionally skip this chunk and continue with the next
+                if not chunks_data:
+                    logger.warning(f"No valid chunks prepared for file {relative_path}.")
                     continue
 
-        # Return the embeddings and the corresponding lists of token IDs
-        return all_embeddings, all_chunk_ids_lists
+                # --- Gets Embeddings and Adds to ChromaDB in Batches ---
+                added_chunk_count = 0
+                file_had_embedding_error = False
+                for i in range(0, len(chunks_data), self.batch_size):
+                    batch = chunks_data[i : i + self.batch_size]
+                    batch_ids = [item[0] for item in batch]
+                    batch_texts = [item[1] for item in batch]
+                    batch_metadatas = [item[2] for item in batch]
 
-# --- Rest of the file ---
+                    logger.debug(f"Getting embeddings for batch {i//self.batch_size + 1} ({len(batch_texts)} chunks) for {relative_path}...")
+                    batch_embeddings = self.get_embeddings_batch_via_service(batch_texts)
+
+                    if batch_embeddings and len(batch_embeddings) == len(batch_ids):
+                        try:
+                            self.collection.add(
+                                embeddings=batch_embeddings,
+                                metadatas=batch_metadatas,
+                                documents=batch_texts, # Stores the text corresponding to the embedding
+                                ids=batch_ids
+                            )
+                            added_chunk_count += len(batch_ids)
+
+                        except Exception as add_err:
+                            logger.error(f"Failed to add batch for {relative_path} to ChromaDB: {add_err}", exc_info=True)
+                            stats["error_files"] += 1 
+                            file_had_embedding_error = True 
+                            break 
+                    else:
+                        logger.error(f"Failed to get embeddings for batch {i//self.batch_size + 1} of {relative_path}. Skipping batch.")
+                        stats["embedding_errors"] += len(batch_ids)
+                        file_had_embedding_error = True
+
+                # --- Updates Stats for the File ---
+                if added_chunk_count > 0:
+                    stats["indexed_files"] += 1
+                    stats["processed_chunks"] += added_chunk_count
+                    if file_had_embedding_error:
+                         logger.warning(f"File {relative_path} partially indexed due to errors.")
+                elif file_had_embedding_error: # No chunks added, but there were errors
+                    if stats["error_files"] == 0: # Avoids double counting if read error already happened
+                       stats["error_files"] += 1
+                    logger.error(f"No chunks successfully indexed for file {relative_path} due to errors.")
+                else: # No chunks added, no errors reported (e.g., all chunks empty after decode)
+                    logger.warning(f"No chunks were added to DB for file {relative_path} (possibly all empty).")
+
+            except Exception as file_proc_err:
+                logger.error(f"Unhandled error processing file {relative_path}: {file_proc_err}", exc_info=True)
+                stats["error_files"] += 1
+                continue # Moves to the next file
+
+        logger.info(f"Indexing complete. Summary: {stats}")
+        final_count = self.collection.count()
+        logger.info(f"Final collection size: {final_count} items.")
+
+
 if __name__ == "__main__":
     try:
         processor = IndexProcessor()
         processor.index_code_files()
+        logger.info("Index processing finished successfully.")
     except Exception as main_err:
         logger.critical(f"An critical error occurred during IndexProcessor execution: {main_err}", exc_info=True)
         sys.exit(1)
