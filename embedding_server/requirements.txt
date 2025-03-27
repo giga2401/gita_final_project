@@ -1,5 +1,8 @@
 fastapi
 uvicorn
-transformers
-torch>=2.0.0 
+requests
 python-dotenv
+transformers>=4.0.0,<5.0.0
+sentencepiece
+numpy<2
+torch>=2.0.0
