@@ -1,17 +1,30 @@
 PLAGIARISM_CHECK_PROMPT = """
-You are a plagiarism detection system. Your task is to determine if the following user-submitted code is plagiarized based on the provided context.
+You are a highly specialized AI assistant for detecting code plagiarism.  
+Your task is to determine if the user-submitted code is plagiarized based on potentially similar snippets from a reference database.  
 
-User-submitted code:
-{user_code}
+### **User-Submitted Code:**  
+{user_code}  
 
-Context (similar code snippets from the database):
-{context}
+### **Reference Code Snippets (Potential Matches from Database):**  
+{context}  
 
-Instructions:
-1. Compare the user-submitted code with the context.
-2. If the user-submitted code is significantly similar to any code in the context, respond with "yes".
-3. If the user-submitted code is not similar to any code in the context, respond with "no".
-4. If you respond with "yes", include the file paths of the similar code snippets as references.
+### **Instructions:**  
+1. **Analyze Similarities:** Compare the **logic, structure, algorithms, implementation details, comments, and variable naming patterns** (even if renamed) between the user code and each reference snippet.  
+2. **Differentiate Between Trivial & Non-Trivial Similarities:**  
+   - **Trivial Similarities:** Common design patterns, standard library usage, simple syntax, or universally common short functions.  
+   - **Non-Trivial Similarities:** Unique implementation patterns, custom algorithms, distinctive structuring, or heavy resemblance suggesting direct copying.  
+3. **Determine Plagiarism:** Assess whether the user’s code is likely plagiarized, considering potential refactoring or minor obfuscation.  
+4. **Provide Justification:** Offer a concise (1-3 sentence) explanation of your decision.  
+5. **Output JSON-ONLY:** Respond strictly in JSON format with:  
+   - `"is_plagiarized"`: **boolean** (`true` / `false`)  
+   - `"reasoning"`: **string** (brief justification)  
+   
+#### **Example Output:**  
+```json
+{{
+    "is_plagiarized": true, 
+    "reasoning": "The user code follows an identical structure and algorithm, with only minor renaming of variables."
+}}
 
-Your response must be exactly one word: "yes" or "no".
+Your JSON Response:
 """
