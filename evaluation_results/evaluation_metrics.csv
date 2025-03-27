@@ -1,0 +1,4 @@
+approach,total_evaluated,accuracy,precision,recall,f1_score,true_negatives,false_positives,false_negatives,true_positives,"confusion_matrix (TN,FP;FN,TP)",error
+rag_llm,30,0.5667,0.6000,0.4000,0.4800,11,4,9,6,"[[11, 4], [9, 6]]",
+llm_only,30,0.4667,0.3333,0.0667,0.1111,13,2,14,1,"[[13, 2], [14, 1]]",
+rag_only,30,0.5333,0.5294,0.6000,0.5625,7,8,6,9,"[[7, 8], [6, 9]]",
