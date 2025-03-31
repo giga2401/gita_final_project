@@ -74,14 +74,30 @@ except (RuntimeError, ValueError, KeyError, Exception) as init_err:
 
 # --- LLM-Only Prompt Template ---
 LLM_ONLY_PROMPT_TEMPLATE = """
-Based *only* on the analysis of the provided code snippet itself, is it likely plagiarized?
-Respond with ONLY a valid JSON object containing a single key "is_plagiarized" with a boolean value (true/false). Example: `{{"is_plagiarized": false}}`
+You are a highly specialized AI assistant for detecting code plagiarism.  
+Your task is to determine if the provided code snippet is likely plagiarized based *only* on its internal analysis, without external references.  
 
-Code: 
-{code}
+### **Code to Analyze:**  
+{code}  
 
-**Your JSON Response:**
+### **Instructions:**  
+1. **Evaluate Originality:** Analyze the **logic, structure, algorithms, implementation details, comments, and variable naming patterns** within the snippet.  
+2. **Consider Common Patterns vs. Unique Implementations:**  
+   - **Common Patterns:** Standard library usage, conventional syntax, basic programming constructs.  
+   - **Unique Implementations:** Distinctive structuring, uncommon logic, or patterns suggesting non-originality.  
+3. **Determine Likelihood of Plagiarism:** Assess whether the code appears to be an original implementation or potentially copied.  
+4. **Output JSON-ONLY:** Respond strictly in JSON format with:  
+   - `"is_plagiarized"`: **boolean** (`true` / `false`)  
+
+#### **Example Output:**  
+```json
+{{
+    "is_plagiarized": false
+}}
+
+Your JSON Response:
 """
+
 
 # --- Helper: Gets Embedding (for RAG-only) ---
 def get_embedding_from_service(code: str) -> Optional[list[float]]:
@@ -231,7 +247,7 @@ def run_evaluation():
                     {"role": "system", "content": "Respond ONLY with a valid JSON object containing the key 'is_plagiarized' (boolean value)."}, # System prompt for LLM-Only
                     {"role": "user", "content": LLM_ONLY_PROMPT_TEMPLATE.format(code=code_snippet)}
                 ],
-                temperature=0.0,
+                temperature=0.7,
                 max_tokens=20 # Allow room for JSON
             )
             llm_text = llm_response.choices[0].message.content.strip()
