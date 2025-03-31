@@ -230,7 +230,7 @@ async def check_plagiarism(snippet: CodeSnippet):
                     {"role": "system", "content": "You are a code plagiarism detection assistant. Respond ONLY with a valid JSON object containing keys 'is_plagiarized' (boolean) and 'reasoning' (string, 1-3 sentences) based on the user prompt."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.0,
+                temperature=0.7,
                 max_tokens=150 
             )
             llm_time = time.time() - llm_start_time
