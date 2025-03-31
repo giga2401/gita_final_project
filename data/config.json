@@ -5,7 +5,7 @@
     "collection_name": "code_embeddings",
     "plagiarism_api_port": 8000,
     "embedding_api_port": 8001,
-    "rag_only_threshold": 12, 
+    "rag_only_threshold": 10, 
     "max_llm_context_length": 10000, 
     "dataset_path": "./data/dataset.csv",
     "repositories": [
@@ -18,6 +18,6 @@
     "chunk_stride": 256, 
     "indexing_batch_size": 32, 
     "db_check_indexed_files": true, 
-    "plagiarism_similarity_threshold": null, 
+    "plagiarism_similarity_threshold": 20, 
     "rag_num_results": 10 
 }

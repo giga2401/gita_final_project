@@ -248,7 +248,7 @@ def run_evaluation():
                     {"role": "user", "content": LLM_ONLY_PROMPT_TEMPLATE.format(code=code_snippet)}
                 ],
                 temperature=0.7,
-                max_tokens=20 # Allow room for JSON
+                max_tokens=20 # Allows room for JSON
             )
             llm_text = llm_response.choices[0].message.content.strip()
             logger.debug(f"{row_identifier} (LLM Only) RAW JSON Output: '{llm_text}'")
